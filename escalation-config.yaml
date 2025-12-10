@@ -1,0 +1,56 @@
+# Resource Escalation Configuration
+# ==================================
+# This file configures the automatic escalation system for Slurm jobs.
+# Jobs that fail with OOM are automatically resubmitted with more memory.
+# Jobs that fail with TIMEOUT are automatically resubmitted with more time.
+
+# Memory ladder - levels to escalate through (in order)
+memory:
+  ladder:
+    - 1G
+    - 2G
+    - 4G
+    - 8G
+    - 16G
+  max_level: 4          # Maximum level index (0-based), 4 = 16G
+
+# Time ladder - levels to escalate through on TIMEOUT (in order)
+# NOTE: Slurm has 1-minute minimum resolution (seconds are rounded up)
+# variable-job.sh has tasks with: 5s (quick), 75s (medium), 150s (slow), 300s (very slow)
+time:
+  ladder:
+    - "00:01:00"        # Level 0: 1 minute  - quick tasks complete, medium+ timeout
+    - "00:02:00"        # Level 1: 2 minutes - medium completes, slow+ timeout
+    - "00:04:00"        # Level 2: 4 minutes - slow completes, very slow timeout
+    - "00:08:00"        # Level 3: 8 minutes - very slow completes
+    - "00:15:00"        # Level 4: 15 minutes - everything completes
+  max_level: 4          # Maximum level index (0-based), 4 = 15 minutes
+
+# Timeout settings (for polling, not time limits)
+timeout:
+  job_timeout: "1:00:00"    # Default job time limit (HH:MM:SS)
+  poll_interval: 5          # Seconds between job status checks
+  sacct_delay: 2            # Seconds to wait for sacct database to update
+
+# Retry settings
+retry:
+  max_retries: 5            # Maximum escalation attempts per chain
+  retry_delay: 5            # Seconds to wait before retry
+
+# Tracker paths (relative to working directory or absolute)
+tracker:
+  base_dir: "/data/tracker"
+  jobs_dir: "/data/tracker/jobs"
+  history_log: "/data/tracker/history.log"
+  checkpoint_dir: "/data/tracker/checkpoints"
+
+# Job defaults
+defaults:
+  partition: "normal"
+  output_pattern: "/data/%x-%j.out"
+  export_vars: "ALL"        # Variables to export to job
+
+# External logging (SQLite database on host filesystem)
+logging:
+  enabled: false
+  db_path: "/host/data/escalation.db"   # Path accessible from host

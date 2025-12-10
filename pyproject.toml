@@ -1,0 +1,34 @@
+[project]
+name = "slurm-afternotok"
+version = "0.0.1"
+description = "Automatic resource escalation for Slurm jobs - retry OOM/TIMEOUT failures with escalated resources"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [
+    { name = "Tesfa Merhatsidk", email = "tmyohannes@gmail.com" }
+]
+keywords = ["slurm", "hpc", "job-scheduling", "oom", "timeout", "escalation"]
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/tesYolan/slurm-afternotok-impl.git"
+Repository = "https://github.com/tesYolan/slurm-afternotok-impl.git"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
