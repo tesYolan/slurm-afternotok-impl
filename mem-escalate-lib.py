@@ -30,6 +30,7 @@ import sys
 import json
 import sqlite3
 import yaml
+import shlex
 from datetime import datetime
 from pathlib import Path
 import subprocess
@@ -50,15 +51,8 @@ def modify_checkpoint(path: str):
         print(f"Warning: Could not update checkpoint: {e}", file=sys.stderr)
 
 
-def load_config(config_path: str) -> None:
-    """Parse YAML config and output shell variable assignments."""
-    try:
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-    except Exception as e:
-        print(f"echo 'ERROR: Failed to parse config: {e}' >&2", file=sys.stdout)
-        sys.exit(1)
-
+def _output_partition_config(config: dict) -> None:
+    """Output partition-specific configuration (memory/time ladders)."""
     # Memory settings
     if 'memory' in config:
         mem = config['memory']
@@ -77,11 +71,18 @@ def load_config(config_path: str) -> None:
         if 'max_level' in time_cfg:
             print(f"TIME_MAX_LEVEL={time_cfg['max_level']}")
 
-    # Timeout settings (for polling)
+    # Timeout settings (specific to partition job limits)
     if 'timeout' in config:
         timeout = config['timeout']
         if 'job_timeout' in timeout:
-            print(f"JOB_TIMEOUT='{timeout['job_timeout']}'")
+            print(f"JOB_TIMEOUT={shlex.quote(str(timeout['job_timeout']))}")
+
+
+def _output_global_config(config: dict) -> None:
+    """Output global configuration settings."""
+    # Timeout settings (for polling)
+    if 'timeout' in config:
+        timeout = config['timeout']
         if 'poll_interval' in timeout:
             print(f"POLL_INTERVAL={timeout['poll_interval']}")
         if 'sacct_delay' in timeout:
@@ -99,21 +100,21 @@ def load_config(config_path: str) -> None:
     if 'tracker' in config:
         tracker = config['tracker']
         if 'base_dir' in tracker:
-            print(f"TRACKER_DIR='{tracker['base_dir']}'")
+            print(f"TRACKER_DIR={shlex.quote(str(tracker['base_dir']))}")
         if 'jobs_dir' in tracker:
-            print(f"JOBS_DIR='{tracker['jobs_dir']}'")
+            print(f"JOBS_DIR={shlex.quote(str(tracker['jobs_dir']))}")
         if 'history_log' in tracker:
-            print(f"HISTORY_LOG='{tracker['history_log']}'")
+            print(f"HISTORY_LOG={shlex.quote(str(tracker['history_log']))}")
         if 'checkpoint_dir' in tracker:
-            print(f"CHECKPOINT_DIR='{tracker['checkpoint_dir']}'")
+            print(f"CHECKPOINT_DIR={shlex.quote(str(tracker['checkpoint_dir']))}")
 
     # Job defaults
     if 'defaults' in config:
         defaults = config['defaults']
         if 'partition' in defaults:
-            print(f"DEFAULT_PARTITION='{defaults['partition']}'")
+            print(f"DEFAULT_PARTITION={shlex.quote(str(defaults['partition']))}")
         if 'output_pattern' in defaults:
-            print(f"OUTPUT_PATTERN='{defaults['output_pattern']}'")
+            print(f"OUTPUT_PATTERN={shlex.quote(str(defaults['output_pattern']))}")
 
     # Logging settings
     if 'logging' in config:
@@ -121,20 +122,68 @@ def load_config(config_path: str) -> None:
         if 'enabled' in logging_cfg:
             print(f"LOGGING_ENABLED={'true' if logging_cfg['enabled'] else 'false'}")
         if 'db_path' in logging_cfg:
-            print(f"LOGGING_DB_PATH='{logging_cfg['db_path']}'")
+            print(f"LOGGING_DB_PATH={shlex.quote(str(logging_cfg['db_path']))}")
 
     # Cluster settings
     if 'cluster' in config:
         cluster = config['cluster']
         if 'name' in cluster:
-            print(f"CLUSTER_NAME='{cluster['name']}'")
+            print(f"CLUSTER_NAME={shlex.quote(str(cluster['name']))}")
         if 'partition' in cluster:
-            print(f"CLUSTER_PARTITION='{cluster['partition']}'")
+            print(f"CLUSTER_PARTITION={shlex.quote(str(cluster['partition']))}")
         if 'nodes' in cluster:
-            print(f"CLUSTER_NODES='{cluster['nodes']}'")
+            print(f"CLUSTER_NODES={shlex.quote(str(cluster['nodes']))}")
 
 
-def create_checkpoint(checkpoint_dir: str, chain_id: str, script: str,
+def load_config(config_path: str, partition: str = None) -> None:
+    """Parse YAML config and output shell variable assignments."""
+    try:
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"echo 'ERROR: Failed to parse config: {e}' >&2", file=sys.stdout)
+        sys.exit(1)
+
+    if 'partitions' in config:
+        # New multi-partition format
+        partitions = config['partitions']
+
+        if partition and partition not in partitions:
+            print(f"echo 'ERROR: Unknown partition: {partition}' >&2")
+            sys.exit(1)
+
+        # Find partition config (specified, default, or first)
+        if partition:
+            pconfig = partitions[partition]
+            print(f"PARTITION={shlex.quote(partition)}")
+        else:
+            # Find default
+            partition = next((n for n, c in partitions.items() if c.get('is_default')), None)
+            if not partition:
+                # Fallback to first
+                partition = list(partitions.keys())[0]
+            
+            pconfig = partitions[partition]
+            print(f"PARTITION={shlex.quote(partition)}")
+
+        _output_partition_config(pconfig)
+        _output_global_config(config)
+    else:
+        # Legacy flat format - backwards compatible
+        # If partition was requested but not in config, we can warn but usually just use default
+        if partition:
+             print(f"PARTITION={shlex.quote(partition)}")
+        else:
+             print("PARTITION='normal'")
+             if 'defaults' in config and 'partition' in config['defaults']:
+                  # Already handled in global config, but ensure PARTITION var is set
+                  print(f"PARTITION={shlex.quote(config['defaults']['partition'])}")
+
+        _output_partition_config(config)
+        _output_global_config(config)
+
+
+def create_checkpoint(checkpoint_dir: str, chain_id: str, partition: str, script: str,
                       memory_ladder: str, time_ladder: str, script_args: list) -> None:
     """Create a new checkpoint file for a job chain."""
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
@@ -150,6 +199,7 @@ def create_checkpoint(checkpoint_dir: str, chain_id: str, script: str,
 
     checkpoint = {
         'chain_id': chain_id,
+        'partition': partition,
         'original_script': script,
         'script_args': script_args,
         'created': datetime.now().isoformat(),
@@ -172,7 +222,7 @@ def create_checkpoint(checkpoint_dir: str, chain_id: str, script: str,
     print(str(checkpoint_file))
 
 
-def create_array_checkpoint(checkpoint_dir: str, chain_id: str, array_spec: str,
+def create_array_checkpoint(checkpoint_dir: str, chain_id: str, partition: str, array_spec: str,
                             total_tasks: int, script: str, memory_ladder: str,
                             time_ladder: str, script_args: list) -> None:
     """Create a checkpoint file for an array job chain."""
@@ -190,6 +240,7 @@ def create_array_checkpoint(checkpoint_dir: str, chain_id: str, array_spec: str,
     checkpoint = {
         'chain_id': chain_id,
         'mode': 'handler_chain',
+        'partition': partition,
         'original_script': script,
         'script_args': script_args,
         'original_array_spec': array_spec,
@@ -252,13 +303,15 @@ def load_checkpoint(checkpoint_file: str) -> None:
         sys.exit(1)
 
     # Output shell variables
-    print(f"CHECKPOINT_FILE='{checkpoint_file}'")
-    print(f"SCRIPT='{checkpoint['original_script']}'")
+    print(f"CHECKPOINT_FILE={shlex.quote(str(checkpoint_file))}")
+    print(f"SCRIPT={shlex.quote(str(checkpoint['original_script']))}")
+    if 'partition' in checkpoint:
+        print(f"PARTITION={shlex.quote(str(checkpoint['partition']))}")
 
     # Script args
     args = checkpoint.get('script_args', [])
     if args:
-        args_str = ' '.join(f'"{a}"' for a in args)
+        args_str = ' '.join(shlex.quote(str(a)) for a in args)
         print(f"SCRIPT_ARGS=({args_str})")
     else:
         print("SCRIPT_ARGS=()")
@@ -266,15 +319,15 @@ def load_checkpoint(checkpoint_file: str) -> None:
     # State
     state = checkpoint.get('state', {})
     print(f"RESUME_LEVEL={state.get('current_level', 0)}")
-    print(f"RESUME_MEMORY='{state.get('current_memory', '1G')}'")
+    print(f"RESUME_MEMORY={shlex.quote(str(state.get('current_memory', '1G')))}")
     print(f"RESUME_TIME_LEVEL={state.get('current_time_level', 0)}")
-    print(f"RESUME_TIME='{state.get('current_time', '00:05:00')}'")
-    print(f"RESUME_STATUS='{state.get('status', 'UNKNOWN')}'")
+    print(f"RESUME_TIME={shlex.quote(str(state.get('current_time', '00:05:00')))}")
+    print(f"RESUME_STATUS={shlex.quote(str(state.get('status', 'UNKNOWN')))}")
 
     # Build job chain from history
     jobs = checkpoint.get('jobs', [])
     job_ids = ','.join(str(j['job_id']) for j in jobs)
-    print(f"RESUME_CHAIN='{job_ids}'")
+    print(f"RESUME_CHAIN={shlex.quote(job_ids)}")
 
 
 def list_checkpoints(checkpoint_dir: str) -> None:
@@ -578,20 +631,251 @@ def log_to_db(db_path: str, chain_id: str, action_type: str, job_id: str = None,
         print(f"Warning: Could not log to database: {e}")
 
 
+def compress_indices(indices_str: str) -> None:
+    """Compress comma-separated indices into Slurm array ranges (e.g., 0-10:2).
+
+    Handles:
+    - Consecutive ranges: 0,1,2,3,4 -> 0-4
+    - Strided ranges: 8,18,28,38 -> 8-38:10
+    - Interleaved patterns: 5,6,15,16,25,26 -> 5-25:10,6-26:10
+    """
+    if not indices_str:
+        print("")
+        return
+
+    try:
+        # Parse indices
+        indices = sorted(set(int(x) for x in indices_str.split(',') if x.strip()))
+        if not indices:
+            print("")
+            return
+    except ValueError:
+        print(indices_str)  # Fallback
+        return
+
+    count = len(indices)
+
+    # Handle trivial cases
+    if count == 1:
+        print(str(indices[0]))
+        return
+    elif count == 2:
+        if indices[1] == indices[0] + 1:
+            print(f"{indices[0]}-{indices[1]}")
+        else:
+            print(f"{indices[0]},{indices[1]}")
+        return
+
+    # Compute gaps between consecutive elements
+    gaps = [indices[i] - indices[i-1] for i in range(1, count)]
+
+    # Check if all gaps are the same (simple stride case)
+    all_same = all(g == gaps[0] for g in gaps)
+
+    # Try to detect interleaved stride patterns (only if gaps vary)
+    detected_period = 0
+    if not all_same:
+        # Look for repeating gap patterns with period 2, 3, 4, or 5
+        # Need at least 3 occurrences of the first gap (to form a valid range)
+        # For period P, we need gaps at indices 0, P, 2P - so len(gaps) >= 2*P + 1
+        for period in range(2, 6):
+            if len(gaps) >= period * 2 + 1:
+                is_periodic = True
+                for i in range(period, len(gaps)):
+                    if gaps[i] != gaps[i % period]:
+                        is_periodic = False
+                        break
+                if is_periodic:
+                    detected_period = period
+                    break
+
+    if detected_period > 1:
+        # Interleaved pattern detected - extract each stride separately
+        # Calculate total stride (sum of one period of gaps)
+        total_stride = sum(gaps[:detected_period])
+
+        # Extract each interleaved sequence
+        result_parts = []
+        for offset in range(detected_period):
+            # Collect elements at this offset
+            seq_indices = [indices[j] for j in range(offset, count, detected_period)]
+            seq_start = seq_indices[0]
+            seq_end = seq_indices[-1]
+            seq_count = len(seq_indices)
+
+            if seq_count >= 3:
+                if total_stride == 1:
+                    result_parts.append(f"{seq_start}-{seq_end}")
+                else:
+                    result_parts.append(f"{seq_start}-{seq_end}:{total_stride}")
+            elif seq_count == 2:
+                if seq_end == seq_start + 1:
+                    result_parts.append(f"{seq_start}-{seq_end}")
+                else:
+                    result_parts.append(f"{seq_start},{seq_end}")
+            else:
+                result_parts.append(str(seq_start))
+
+        print(','.join(result_parts))
+        return
+
+    # Fall back to simple stride detection (greedy algorithm)
+    ranges = []
+    i = 0
+
+    while i < count:
+        start = indices[i]
+
+        if i + 1 < count:
+            stride = indices[i + 1] - indices[i]
+            range_end = start
+            range_count = 1
+
+            # Count how many elements follow this stride
+            j = i + 1
+            while j < count:
+                expected = range_end + stride
+                if indices[j] == expected:
+                    range_end = indices[j]
+                    range_count += 1
+                    j += 1
+                else:
+                    break
+
+            # Decide how to output this range
+            if range_count >= 3:
+                if stride == 1:
+                    ranges.append(f"{start}-{range_end}")
+                else:
+                    ranges.append(f"{start}-{range_end}:{stride}")
+                i = j
+            elif range_count == 2 and stride == 1:
+                ranges.append(f"{start}-{range_end}")
+                i = j
+            else:
+                ranges.append(str(start))
+                i += 1
+        else:
+            ranges.append(str(start))
+            i += 1
+
+    print(','.join(ranges))
+
+
+def analyze_job(job_id: str) -> None:
+    """Analyze a job's status via sacct and output failure indices."""
+    try:
+        # Query sacct
+        # Format: JobID,State,ExitCode
+        # -n: no header
+        # -X: no steps (just job/task level)
+        # --parsable2: pipe-delimited
+        cmd = ['sacct', '-n', '-X', '-j', job_id, '-o', 'JobID,State,ExitCode', '--parsable2']
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"echo 'ERROR: sacct failed: {e}' >&2")
+        return
+
+    oom_indices = []
+    timeout_indices = []
+    other_failed_indices = []
+    completed_count = 0
+    total_count = 0
+
+    # Parse output
+    # Example lines:
+    # 100_1|COMPLETED|0:0
+    # 100_2|OUT_OF_MEMORY|0:125
+    # 100_3|TIMEOUT|0:0
+    # 100_4|FAILED|1:0
+    
+    for line in result.stdout.strip().split('\n'):
+        if not line:
+            continue
+        
+        parts = line.split('|')
+        if len(parts) < 3:
+            continue
+            
+        job_spec = parts[0]
+        state = parts[1].split()[0]  # Take first word (e.g. CANCELLED by...)
+        exit_code = parts[2]
+        
+        total_count += 1
+        
+        # Extract task ID
+        # Array: 100_1 -> 1
+        # Single: 100 -> 0 (or null?)
+        task_id = 0
+        if '_' in job_spec:
+            try:
+                task_id = int(job_spec.split('_')[1])
+            except ValueError:
+                pass
+        
+        if 'COMPLETED' in state:
+            completed_count += 1
+        elif 'OUT_OF_MEMORY' in state:
+            oom_indices.append(task_id)
+        elif 'TIMEOUT' in state:
+            timeout_indices.append(task_id)
+        elif 'FAILED' in state or 'CANCELLED' in state or 'NODE_FAIL' in state:
+            # Check exit code for OOM (137 usually, but Slurm might not set state to OOM)
+            # ExitCode format is ReturnCode:Signal
+            main_exit = 0
+            if ':' in exit_code:
+                try:
+                    main_exit = int(exit_code.split(':')[0])
+                except ValueError:
+                    pass
+            
+            if main_exit == 137: # OOM killer often 137 (128+9)
+                 oom_indices.append(task_id)
+            else:
+                 other_failed_indices.append(task_id)
+    
+    # Sort indices
+    oom_indices.sort()
+    timeout_indices.sort()
+    other_failed_indices.sort()
+    
+    # Output variables
+    print(f"TOTAL_COUNT={total_count}")
+    print(f"COMPLETED_COUNT={completed_count}")
+    print(f"OOM_COUNT={len(oom_indices)}")
+    print(f"TIMEOUT_COUNT={len(timeout_indices)}")
+    print(f"OTHER_FAILED_COUNT={len(other_failed_indices)}")
+    
+    # Join with commas
+    print(f"OOM_INDICES={','.join(map(str, oom_indices))}")
+    print(f"TIMEOUT_INDICES={','.join(map(str, timeout_indices))}")
+    # print(f"OTHER_FAILED_INDICES={','.join(map(str, other_failed_indices))}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Resource Escalation Library - Python utilities for mem-escalate.sh'
     )
     subparsers = parser.add_subparsers(dest='command', help='Command to run')
 
+    # compress-indices
+    p = subparsers.add_parser('compress-indices', help='Compress indices to ranges')
+    p.add_argument('indices', help='Comma-separated indices')
+
+    # analyze-job
+    p = subparsers.add_parser('analyze-job', help='Analyze job failure status')
+    p.add_argument('job_id', help='Job ID to analyze')
+
     # load-config
     p = subparsers.add_parser('load-config', help='Parse YAML config file')
     p.add_argument('config_file', help='Path to config file')
+    p.add_argument('--partition', '-p', help='Partition name')
 
     # create-checkpoint
     p = subparsers.add_parser('create-checkpoint', help='Create a new checkpoint')
     p.add_argument('checkpoint_dir', help='Checkpoint directory')
     p.add_argument('chain_id', help='Chain ID')
+    p.add_argument('partition', help='Partition name')
     p.add_argument('script', help='Script path')
     p.add_argument('memory_ladder', help='Space-separated memory levels')
     p.add_argument('time_ladder', help='Space-separated time levels')
@@ -601,6 +885,7 @@ def main():
     p = subparsers.add_parser('create-array-checkpoint', help='Create array job checkpoint')
     p.add_argument('checkpoint_dir', help='Checkpoint directory')
     p.add_argument('chain_id', help='Chain ID')
+    p.add_argument('partition', help='Partition name')
     p.add_argument('array_spec', help='Array specification')
     p.add_argument('total_tasks', type=int, help='Total number of tasks')
     p.add_argument('script', help='Script path')
@@ -691,13 +976,17 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == 'load-config':
-        load_config(args.config_file)
+    if args.command == 'compress-indices':
+        compress_indices(args.indices)
+    elif args.command == 'analyze-job':
+        analyze_job(args.job_id)
+    elif args.command == 'load-config':
+        load_config(args.config_file, getattr(args, 'partition', None))
     elif args.command == 'create-checkpoint':
-        create_checkpoint(args.checkpoint_dir, args.chain_id, args.script,
+        create_checkpoint(args.checkpoint_dir, args.chain_id, args.partition, args.script,
                           args.memory_ladder, args.time_ladder, args.script_args)
     elif args.command == 'create-array-checkpoint':
-        create_array_checkpoint(args.checkpoint_dir, args.chain_id, args.array_spec,
+        create_array_checkpoint(args.checkpoint_dir, args.chain_id, args.partition, args.array_spec,
                                 args.total_tasks, args.script, args.memory_ladder,
                                 args.time_ladder, args.script_args)
     elif args.command == 'update-checkpoint':

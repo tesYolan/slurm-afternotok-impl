@@ -219,6 +219,28 @@ scenario_max() {
     run_escalation --array=0-9999 --throttle=100 "$VARIABLE_JOB"
 }
 
+# Scenario: Argument Passing
+scenario_args() {
+    print_header "Scenario: Argument Passing"
+    print_info "Testing handling of spaces and quotes in arguments (Security Fix Validation)"
+    
+    # Create a job that prints its arguments
+    cat > /data/args-job.sh << 'EOF'
+#!/bin/bash
+#SBATCH --job-name=args-test
+#SBATCH --output=/data/%x-%j.out
+
+echo "Argument 1: >$1<"
+echo "Argument 2: >$2<"
+echo "Argument 3: >$3<"
+EOF
+    chmod +x /data/args-job.sh
+
+    # Use explicit partition to test -p flag
+    # Arguments: "Spaces" "Quotes" "Simple"
+    run_escalation -p normal --array=0-0 /data/args-job.sh "Arg with spaces" "Arg'with'quotes" "Simple"
+}
+
 # Show usage
 usage() {
     echo "Usage: $0 <scenario>"
@@ -229,6 +251,7 @@ usage() {
     echo "  timeout     - 100 jobs that will timeout and need escalation"
     echo "  oom         - 100 jobs that will OOM and need memory escalation"
     echo "  mixed       - 1000 jobs with mixed behavior"
+    echo "  args        - Test argument passing with spaces/quotes"
     echo "  large       - 5000 jobs stress test"
     echo "  max         - 10000 jobs (Slurm MaxArraySize limit test)"
     echo "  all         - Run all scenarios (excluding large/max)"
@@ -236,7 +259,7 @@ usage() {
     echo "Examples:"
     echo "  $0 fast     # Quick test under 5 min"
     echo "  $0 mixed"
-    echo "  $0 max"
+    echo "  $0 args"
 }
 
 # Main
@@ -259,6 +282,9 @@ main() {
         mixed)
             scenario_mixed
             ;;
+        args)
+            scenario_args
+            ;;
         large)
             scenario_large
             ;;
@@ -277,6 +303,9 @@ main() {
             echo ""
             read -p "Press Enter to continue to mixed scenario..."
             scenario_mixed
+            echo ""
+            read -p "Press Enter to continue to args scenario..."
+            scenario_args
             ;;
         *)
             usage

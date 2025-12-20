@@ -31,6 +31,10 @@ echo "Memory:       $SLURM_MEM_PER_NODE"
 echo "Time Limit:   $SLURM_TIMELIMIT"
 echo "Hostname:     $(hostname)"
 echo "Start Time:   $(date -Iseconds)"
+echo "Escalation Info:"
+echo "  Level:        ${MEM_ESCALATE_LEVEL:-0}"
+echo "  Chain:        ${MEM_ESCALATE_CHAIN_ID:-none}"
+echo "  Partition:    ${SLURM_JOB_PARTITION}"
 echo ""
 
 # Determine behavior based on task ID

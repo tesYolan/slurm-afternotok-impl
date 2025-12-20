@@ -68,6 +68,11 @@ CURRENT_TIME_LEVEL=${CURRENT_TIME_LEVEL:-0}
 TIME_MAX_LEVEL=${TIME_MAX_LEVEL:-4}
 CURRENT_TIME=${CURRENT_TIME:-${TIME_LADDER_ARR[0]:-00:05:00}}
 
+# Load checkpoint to get safe SCRIPT_ARGS and other config
+if [[ -f "${CHECKPOINT_DIR}/${CHAIN_ID}.checkpoint" ]]; then
+    eval "$(python3 "$PYLIB" load-checkpoint "${CHECKPOINT_DIR}/${CHAIN_ID}.checkpoint")"
+fi
+
 # Get memory for a given level
 get_memory_for_level() {
     local level=$1
@@ -80,202 +85,15 @@ get_time_for_level() {
     echo "${TIME_LADDER_ARR[$level]}"
 }
 
-# Get task indices by state from sacct
-# Usage: get_indices_by_state <job_id> <include_pattern> [exclude_pattern]
-get_indices_by_state() {
-    local job_id="$1"
-    local include="$2"
-    local exclude="$3"
-
-    sacct -nX -j "$job_id" -o JobID,State --parsable2 2>/dev/null | \
-        grep -E "$include" | \
-        { [[ -n "$exclude" ]] && grep -vE "$exclude" || cat; } | \
-        awk -F'[_|]' '{print $2}' | \
-        sort -un | paste -sd, -
-}
-
-# Count items in comma-separated list
-count_indices() {
-    local indices="$1"
-    [[ -z "$indices" ]] && echo "0" && return
-    echo "$indices" | tr ',' '\n' | wc -l
-}
-
 # Compress comma-separated indices into range notation with stride detection
 # Input:  "0,1,2,3,4,100,101,102,200"
 # Output: "0-4,100-102,200"
-# Also detects stride patterns like "8,18,28,38" -> "8-38:10"
-# And interleaved patterns like "5,6,15,16,25,26" -> "5-25:10,6-26:10"
-#
-# Slurm array syntax: start-end:stride
-# Examples:
-#   0-10      -> tasks 0,1,2,3,4,5,6,7,8,9,10
-#   0-10:2    -> tasks 0,2,4,6,8,10
-#   8-498:10  -> tasks 8,18,28,...,498
+# Uses Python library for robust compression
 compress_indices_to_ranges() {
     local indices="$1"
     [[ -z "$indices" ]] && return
 
-    # Convert to sorted array
-    local -a nums
-    IFS=',' read -ra nums <<< "$indices"
-
-    # Sort numerically
-    IFS=$'\n' nums=($(sort -n <<< "${nums[*]}")); unset IFS
-
-    local count=${#nums[@]}
-
-    # Handle trivial cases
-    if (( count == 0 )); then
-        return
-    elif (( count == 1 )); then
-        echo "${nums[0]}"
-        return
-    elif (( count == 2 )); then
-        if (( nums[1] == nums[0] + 1 )); then
-            echo "${nums[0]}-${nums[1]}"
-        else
-            echo "${nums[0]},${nums[1]}"
-        fi
-        return
-    fi
-
-    # FIX DELETE this till the end of the file. this came from making the errors 18, 19; and then each subsequent error was 10 apart. this created more items in the array than necessary.
-    # Try to detect interleaved stride patterns first
-    # Look for patterns like 5,6,15,16,25,26 which are two strides: 5,15,25 and 6,16,26
-    # We detect this by looking at gaps between consecutive elements
-    local -a gaps
-    for ((i=1; i<count; i++)); do
-        gaps+=($((nums[i] - nums[i-1])))
-    done
-
-    # Check for repeating gap pattern (e.g., [1,9,1,9,1,9] for 5,6,15,16,25,26)
-    # First check if all gaps are the same (simple stride) - skip interleaved detection
-    local all_same=1
-    local first_gap="${gaps[0]}"
-    for ((i=1; i<${#gaps[@]}; i++)); do
-        if (( gaps[i] != first_gap )); then
-            all_same=0
-            break
-        fi
-    done
-
-    # Find the period of the gap pattern (only if gaps vary)
-    local detected_period=0
-    if (( all_same == 0 )); then
-        for period in 2 3 4 5; do
-            if (( ${#gaps[@]} >= period * 3 )); then  # Need at least 3 repetitions
-                local is_periodic=1
-                for ((i=period; i<${#gaps[@]}; i++)); do
-                    if (( gaps[i] != gaps[i % period] )); then
-                        is_periodic=0
-                        break
-                    fi
-                done
-                if (( is_periodic )); then
-                    detected_period=$period
-                    break
-                fi
-            fi
-        done
-    fi
-
-    if (( detected_period > 1 )); then
-        # We have an interleaved pattern - extract each stride separately
-        # Calculate the total stride (sum of one period of gaps)
-        local total_stride=0
-        for ((i=0; i<detected_period; i++)); do
-            total_stride=$((total_stride + gaps[i]))
-        done
-
-        # Extract each interleaved sequence
-        local result=""
-        for ((offset=0; offset<detected_period; offset++)); do
-            local seq_start="${nums[$offset]}"
-            local seq_end="$seq_start"
-            local seq_count=1
-
-            # Follow this stride
-            for ((j=offset+detected_period; j<count; j+=detected_period)); do
-                seq_end="${nums[$j]}"
-                ((seq_count++))
-            done
-
-            if (( seq_count >= 3 )); then
-                if (( total_stride == 1 )); then
-                    result+="${seq_start}-${seq_end},"
-                else
-                    result+="${seq_start}-${seq_end}:${total_stride},"
-                fi
-            elif (( seq_count == 2 )); then
-                if (( seq_end == seq_start + 1 )); then
-                    result+="${seq_start}-${seq_end},"
-                else
-                    result+="${seq_start},${seq_end},"
-                fi
-            else
-                result+="${seq_start},"
-            fi
-        done
-        echo "${result%,}"
-        return
-    fi
-
-    # Fall back to simple stride detection (original algorithm)
-    local result=""
-    local i=0
-
-    while (( i < count )); do
-        local start="${nums[$i]}"
-
-        # Try to find a strided or consecutive range starting here
-        if (( i + 1 < count )); then
-            local stride=$((nums[i+1] - nums[i]))
-            local range_end="$start"
-            local range_count=1
-
-            # Count how many elements follow this stride
-            local j=$((i + 1))
-            while (( j < count )); do
-                local expected=$((range_end + stride))
-                if (( nums[j] == expected )); then
-                    range_end="${nums[$j]}"
-                    ((range_count++))
-                    ((j++))
-                else
-                    break
-                fi
-            done
-
-            # Decide how to output this range
-            if (( range_count >= 3 )); then
-                # Worth making a range (at least 3 elements)
-                if (( stride == 1 )); then
-                    # Consecutive range: start-end
-                    result+="${start}-${range_end},"
-                else
-                    # Strided range: start-end:stride
-                    result+="${start}-${range_end}:${stride},"
-                fi
-                i=$j
-            elif (( range_count == 2 && stride == 1 )); then
-                # Two consecutive: start-end is shorter than start,end for small numbers
-                result+="${start}-${range_end},"
-                i=$j
-            else
-                # Single element or not worth a range
-                result+="${start},"
-                ((i++))
-            fi
-        else
-            # Last element
-            result+="${start},"
-            ((i++))
-        fi
-    done
-
-    # Remove trailing comma
-    echo "${result%,}"
+    python3 "$PYLIB" compress-indices "$indices"
 }
 
 # Split indices into chunks that fit within command-line limits
@@ -290,10 +108,13 @@ submit_array_batched() {
     local throttle="$4"
     local script="$5"
     shift 5
-    local script_args="$*"
+    local script_args=("$@")
 
     local compressed=$(compress_indices_to_ranges "$indices")
     local len=${#compressed}
+
+    local partition_opt=""
+    [[ -n "$PARTITION" ]] && partition_opt="--partition=$PARTITION"
 
     if (( len <= MAX_ARRAY_SPEC_LEN )); then
         # Fits in one submission
@@ -301,12 +122,13 @@ submit_array_batched() {
         [[ -n "$throttle" ]] && array_opt="--array=${compressed}%${throttle}"
 
         sbatch --parsable \
+            $partition_opt \
             "$array_opt" \
             --mem="$mem" \
             --time="$time" \
             --spread-job \
             --export=ALL \
-            "$script" $script_args 2>&1
+            "$script" "${script_args[@]}" 2>&1
         return $?
     fi
 
@@ -337,12 +159,13 @@ submit_array_batched() {
 
         local job_id
         job_id=$(sbatch --parsable \
+            $partition_opt \
             "$array_opt" \
             --mem="$mem" \
             --time="$time" \
             --spread-job \
             --export=ALL \
-            "$script" $script_args 2>&1)
+            "$script" "${script_args[@]}" 2>&1)
 
         if [[ ! "$job_id" =~ ^[0-9]+$ ]]; then
             echo "ERROR: Batch submission failed: $job_id" >&2
@@ -367,17 +190,22 @@ echo "Checking parent job $PARENT_JOB for failures..."
 # Wait a moment for sacct to update
 sleep 2
 
-# Get failure indices by state
-oom_indices=$(get_indices_by_state "$PARENT_JOB" "OUT_OF_MEMORY")
-timeout_indices=$(get_indices_by_state "$PARENT_JOB" "TIMEOUT")
-other_failed_indices=$(get_indices_by_state "$PARENT_JOB" "FAILED|CANCELLED" "OUT_OF_MEMORY|TIMEOUT")
+# Use Python library to analyze job failures (Robust parsing)
+eval "$(python3 "$PYLIB" analyze-job "$PARENT_JOB")"
 
-# Get counts
-completed_count=$(sacct -nX -j "$PARENT_JOB" -o State --parsable2 2>/dev/null | grep -c "COMPLETED" || echo "0")
-total_count=$(sacct -nX -j "$PARENT_JOB" -o State --parsable2 2>/dev/null | wc -l)
-oom_count=$(count_indices "$oom_indices")
-timeout_count=$(count_indices "$timeout_indices")
-other_failed_count=$(count_indices "$other_failed_indices")
+# Map python outputs to shell variables
+# Variables set by eval:
+# TOTAL_COUNT, COMPLETED_COUNT, OOM_COUNT, TIMEOUT_COUNT, OTHER_FAILED_COUNT
+# OOM_INDICES, TIMEOUT_INDICES
+
+# Variables mapping
+completed_count=$COMPLETED_COUNT
+total_count=$TOTAL_COUNT
+oom_count=$OOM_COUNT
+timeout_count=$TIMEOUT_COUNT
+other_failed_count=$OTHER_FAILED_COUNT
+oom_indices=$OOM_INDICES
+timeout_indices=$TIMEOUT_INDICES
 
 echo "Results for job $PARENT_JOB:"
 echo "  Total tasks:     $total_count"
@@ -492,7 +320,14 @@ submit_retry_with_handler() {
     local time_level="$5"
     local escalation_type="$6"  # "OOM" or "TIMEOUT"
 
-    local task_count=$(count_indices "$indices")
+    # Use Python to count indices (count_indices bash function was removed)
+    # Just count commas + 1 if not empty
+    local task_count=0
+    if [[ -n "$indices" ]]; then
+        task_count=$(echo "$indices" | tr -cd ',' | wc -c)
+        ((task_count++))
+    fi
+    
     echo ""
     echo "--- Submitting $escalation_type retry ---"
     echo "  Indices: $indices ($task_count tasks)"
@@ -501,7 +336,7 @@ submit_retry_with_handler() {
 
     # Submit the retry job
     local job_id
-    job_id=$(submit_array_batched "$indices" "$mem" "$time" "$ARRAY_THROTTLE" "$SCRIPT" $SCRIPT_ARGS)
+    job_id=$(submit_array_batched "$indices" "$mem" "$time" "$ARRAY_THROTTLE" "$SCRIPT" "${SCRIPT_ARGS[@]}")
     local status=$?
 
     if [[ $status -ne 0 ]] || [[ ! "$job_id" =~ ^[0-9]+$ ]]; then
@@ -517,7 +352,8 @@ submit_retry_with_handler() {
     export_vars+=",CURRENT_TIME=$time"
     export_vars+=",CHAIN_ID=$CHAIN_ID"
     export_vars+=",SCRIPT=$SCRIPT"
-    export_vars+=",SCRIPT_ARGS=$SCRIPT_ARGS"
+    # SCRIPT_ARGS is loaded from checkpoint by the next handler
+    export_vars+=",PARTITION=$PARTITION"
     export_vars+=",MAX_LEVEL=$MAX_LEVEL"
     export_vars+=",TIME_MAX_LEVEL=$TIME_MAX_LEVEL"
     export_vars+=",MEMORY_LADDER=$MEMORY_LADDER"
@@ -529,9 +365,13 @@ submit_retry_with_handler() {
     export_vars+=",LOGGING_DB_PATH=$LOGGING_DB_PATH"
     [[ -n "$ARRAY_THROTTLE" ]] && export_vars+=",ARRAY_THROTTLE=$ARRAY_THROTTLE"
 
+    local partition_opt=""
+    [[ -n "$PARTITION" ]] && partition_opt="--partition=$PARTITION"
+
     # Submit next handler with afternotok dependency
     local handler_id
     handler_id=$(sbatch --parsable \
+        $partition_opt \
         --dependency=afternotok:$job_id \
         --export="$export_vars" \
         "$HANDLER_SCRIPT" 2>&1)
@@ -559,6 +399,7 @@ submit_retry_with_handler() {
 
         local success_id
         success_id=$(sbatch --parsable \
+            $partition_opt \
             --job-name="escalate-success" \
             --output="${CHECKPOINT_DIR}/../success-handler-%j.out" \
             --time=00:05:00 \

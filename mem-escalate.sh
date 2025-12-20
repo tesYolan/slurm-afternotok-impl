@@ -82,6 +82,7 @@ LOGGING_DB_PATH=""
 # ARGUMENT PARSING
 # ============================================================
 CONFIG_FILE=""
+PARTITION=""
 START_MEM=""
 NO_WAIT=false
 RESUME_CHAIN=""
@@ -98,6 +99,14 @@ while [[ $# -gt 0 ]]; do
         -c|--config)
             CONFIG_FILE="$2"
             shift 2
+            ;;
+        -p|--partition)
+            PARTITION="$2"
+            shift 2
+            ;;
+        --partition=*|-p=*)
+            PARTITION="${1#*=}"
+            shift
             ;;
         -m|--start-mem)
             START_MEM="$2"
@@ -221,8 +230,11 @@ load_config() {
         return 0
     fi
 
+    local partition_arg=""
+    [[ -n "$PARTITION" ]] && partition_arg="--partition=$PARTITION"
+
     echo "INFO: Loading config from $config_path" >&2
-    eval "$(python3 "$PYLIB" load-config "$config_path")"
+    eval "$(python3 "$PYLIB" load-config "$config_path" $partition_arg)"
 }
 
 # ============================================================
@@ -240,7 +252,7 @@ create_checkpoint() {
     local args=("$@")
 
     # Use Python library to create checkpoint
-    python3 "$PYLIB" create-checkpoint "$CHECKPOINT_DIR" "$chain_id" "$script" "${MEMORY_LADDER[*]}" "${TIME_LADDER[*]}" "${args[@]}"
+    python3 "$PYLIB" create-checkpoint "$CHECKPOINT_DIR" "$chain_id" "${PARTITION:-normal}" "$script" "${MEMORY_LADDER[*]}" "${TIME_LADDER[*]}" "${args[@]}"
 }
 
 load_checkpoint() {
@@ -352,7 +364,7 @@ run_escalation() {
     # Submit the job
     echo "Submitting job with --mem=$mem ..."
     local job_id
-    job_id=$(sbatch --parsable --mem="$mem" --time="$JOB_TIMEOUT" --export="$export_vars" "$SCRIPT" "${SCRIPT_ARGS[@]}" 2>&1)
+    job_id=$(sbatch --parsable --partition="$PARTITION" --mem="$mem" --time="$JOB_TIMEOUT" --export="$export_vars" "$SCRIPT" "${SCRIPT_ARGS[@]}" 2>&1)
 
     if [[ ! "$job_id" =~ ^[0-9]+$ ]]; then
         echo "ERROR: sbatch failed: $job_id" >&2
@@ -490,7 +502,7 @@ create_array_checkpoint() {
     local args=("$@")
 
     # Use Python library to create array checkpoint
-    python3 "$PYLIB" create-array-checkpoint "$CHECKPOINT_DIR" "$chain_id" "$array_spec" "$total_tasks" "$script" "${MEMORY_LADDER[*]}" "${TIME_LADDER[*]}" "${args[@]}"
+    python3 "$PYLIB" create-array-checkpoint "$CHECKPOINT_DIR" "$chain_id" "${PARTITION:-normal}" "$array_spec" "$total_tasks" "$script" "${MEMORY_LADDER[*]}" "${TIME_LADDER[*]}" "${args[@]}"
 }
 
 # Submit array job with escalation handler chain
@@ -540,6 +552,7 @@ submit_array_with_escalation() {
     echo "Submitting main array job with --mem=$mem --time=$current_time --spread-job ..."
     local main_job
     main_job=$(sbatch --parsable \
+        --partition="$PARTITION" \
         "$array_opt" \
         --mem="$mem" \
         --time="$current_time" \
@@ -561,7 +574,8 @@ submit_array_with_escalation() {
     handler_export+=",CURRENT_TIME=$current_time"
     handler_export+=",CHAIN_ID=$chain_id"
     handler_export+=",SCRIPT=$SCRIPT"
-    handler_export+=",SCRIPT_ARGS=${SCRIPT_ARGS[*]}"
+    # SCRIPT_ARGS is loaded from checkpoint by the handler
+    handler_export+=",PARTITION=$PARTITION"
     handler_export+=",MAX_LEVEL=$MAX_LEVEL"
     handler_export+=",TIME_MAX_LEVEL=$TIME_MAX_LEVEL"
     handler_export+=",MEMORY_LADDER=${MEMORY_LADDER[*]}"
@@ -577,6 +591,7 @@ submit_array_with_escalation() {
     echo "Submitting handler with --dependency=afternotok:$main_job ..."
     local handler_job
     handler_job=$(sbatch --parsable \
+        --partition="$PARTITION" \
         --dependency=afternotok:$main_job \
         --export="$handler_export" \
         "$handler_script" 2>&1)
@@ -603,6 +618,7 @@ submit_array_with_escalation() {
     echo "Submitting success handler with --dependency=afterok:$main_job ..."
     local success_job
     success_job=$(sbatch --parsable \
+        --partition="$PARTITION" \
         --job-name="escalate-success" \
         --output="${CHECKPOINT_DIR}/../success-handler-%j.out" \
         --time=00:05:00 \
