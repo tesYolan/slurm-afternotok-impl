@@ -3,24 +3,32 @@
 # =====================================
 # Submit various job types to test the memory/time escalation system.
 #
+# Uses escalation-target.yaml with levels-based config:
+#   Level 0: devel,day  / 1G  / 1min
+#   Level 1: week       / 4G  / 2min
+#   Level 2: week       / 8G  / 4min
+#   Level 3: pi_jetz    / 16G / 8min
+#
 # Usage:
 #   ./test-scenarios.sh <scenario>
 #
-# Scenarios (all use array jobs):
-#   fast        - 500 quick test (under 5 min with all escalations)
-#   quick       - 100 quick jobs (all complete within 30s)
+# Scenarios:
+#   levels      - 20 tasks testing all 4 escalation levels (recommended)
+#   quick       - 100 quick jobs (all complete at level 0)
 #   timeout     - 100 jobs that will timeout and need escalation
 #   oom         - 100 jobs that will OOM and need memory escalation
 #   mixed       - 1000 jobs with mixed behavior
+#   mixed-fail  - 30 jobs: some complete, some escalate, some code errors
 #   large       - 5000 jobs stress test
 #   max         - 10000 jobs (Slurm MaxArraySize limit test)
-#   all         - Run all scenarios (excluding large/max)
+#   all         - Run quick, timeout, oom, levels scenarios
 
 set -e
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 ESCALATE_SCRIPT="$SCRIPT_DIR/../mem-escalate.sh"
 VARIABLE_JOB="$SCRIPT_DIR/variable-job.sh"
+CONFIG_FILE="$SCRIPT_DIR/../escalation-target.yaml"
 
 # Colors for output
 RED='\033[0;31m'
@@ -50,7 +58,7 @@ run_escalation() {
 
     # Run script and capture both output and exit code
     set +e  # Temporarily disable exit on error
-    output=$("$ESCALATE_SCRIPT" "$@" 2>&1)
+    output=$("$ESCALATE_SCRIPT" --config "$CONFIG_FILE" "$@" 2>&1)
     exit_code=$?
     set -e
 
@@ -98,14 +106,40 @@ check_docker() {
     fi
 }
 
-# Scenario: Fast test (under 5 min with escalations)
-scenario_fast() {
-    print_header "Scenario: Fast Test (500 tasks)"
-    print_info "Quick escalation test - target under 5 min"
-    print_info "Uses variable-job.sh with fast timings"
+# Scenario: Levels test (tests all 4 escalation levels)
+scenario_levels() {
+    print_header "Scenario: Levels Test (20 tasks)"
+    print_info "Tests all 4 escalation levels with partition switching"
+    print_info ""
+    print_info "Task behavior (by ID mod 10):"
+    print_info "  0-4: Quick (5s)    → completes at Level 0 (devel,day/1G/1min)"
+    print_info "  5-6: Medium (75s)  → Level 0 timeout → Level 1 (week/4G/2min)"
+    print_info "  7:   Slow (150s)   → Level 0-1 timeout → Level 2 (week/8G/4min)"
+    print_info "  8:   OOM (1.5GB)   → Level 0 OOM → Level 1 (week/4G/2min)"
+    print_info "  9:   Very slow (5min) → Level 0-2 timeout → Level 3 (pi_jetz/16G/8min)"
+    echo ""
+    print_info "Expected duration: ~10-12 minutes (waiting for very slow tasks)"
     echo ""
 
-    run_escalation --array=0-499 --throttle=50 "$VARIABLE_JOB"
+    run_escalation --array=0-19 --throttle=10 "$VARIABLE_JOB"
+}
+
+# Scenario: Mixed with code errors (some complete, some escalate, some fail)
+scenario_mixed_fail() {
+    print_header "Scenario: Mixed with Failures (30 tasks)"
+    print_info "Tests escalation + non-retryable code errors"
+    print_info ""
+    print_info "Task behavior:"
+    print_info "  0-9:   Quick (5s)    → completes at Level 0"
+    print_info "  10-14: CODE ERROR    → exit 1, NOT retried (reported failed)"
+    print_info "  15-19: OOM (1.5GB)   → Level 0 OOM → escalates to Level 1"
+    print_info "  20-24: Quick (5s)    → completes at Level 0"
+    print_info "  25-29: TIMEOUT (75s) → Level 0 timeout → escalates to Level 1"
+    echo ""
+    print_info "Expected: 20 complete, 5 code errors (not retried), 10 escalated"
+    echo ""
+
+    run_escalation --array=0-29 --throttle=10 --export="FAIL_TASKS=10:11:12:13:14" "$VARIABLE_JOB"
 }
 
 # Scenario: Quick jobs (all complete fast)
@@ -219,6 +253,17 @@ scenario_max() {
     run_escalation --array=0-9999 --throttle=100 "$VARIABLE_JOB"
 }
 
+# Scenario: Maximum scale with code errors
+scenario_max_fail() {
+    print_header "Scenario: Maximum Scale + Code Errors (10000 tasks)"
+    print_info "10000 tasks with FAIL_MOD=17 (tasks divisible by 17 fail)"
+    print_info "Expected: 588 tasks fail with exit 1 (NOT retried)"
+    print_info "Using throttle of 100 concurrent tasks"
+    echo ""
+
+    run_escalation --array=0-9999 --throttle=100 --export="FAIL_MOD=17" "$VARIABLE_JOB"
+}
+
 # Scenario: Argument Passing
 scenario_args() {
     print_header "Scenario: Argument Passing"
@@ -245,21 +290,29 @@ EOF
 usage() {
     echo "Usage: $0 <scenario>"
     echo ""
-    echo "Scenarios (all use array jobs):"
-    echo "  fast        - 500 tasks quick test (under 5 min with escalations)"
-    echo "  quick       - 100 quick jobs (all complete within 30s)"
-    echo "  timeout     - 100 jobs that will timeout and need escalation"
-    echo "  oom         - 100 jobs that will OOM and need memory escalation"
+    echo "Escalation Levels (from escalation-target.yaml):"
+    echo "  Level 0: devel,day  / 1G  / 1min"
+    echo "  Level 1: week       / 4G  / 2min"
+    echo "  Level 2: week       / 8G  / 4min"
+    echo "  Level 3: pi_jetz    / 16G / 8min"
+    echo ""
+    echo "Scenarios:"
+    echo "  levels      - 20 tasks testing all 4 levels (RECOMMENDED)"
+    echo "  quick       - 100 quick jobs (all complete at level 0)"
+    echo "  timeout     - 100 jobs that timeout and escalate time"
+    echo "  oom         - 100 jobs that OOM and escalate memory"
     echo "  mixed       - 1000 jobs with mixed behavior"
+    echo "  mixed-fail  - 30 jobs with code errors (not retried)"
     echo "  args        - Test argument passing with spaces/quotes"
     echo "  large       - 5000 jobs stress test"
-    echo "  max         - 10000 jobs (Slurm MaxArraySize limit test)"
-    echo "  all         - Run all scenarios (excluding large/max)"
+    echo "  max         - 10000 jobs (Slurm MaxArraySize limit)"
+    echo "  max-fail    - 10000 jobs with FAIL_MOD=17 (588 code errors)"
+    echo "  all         - Run levels, quick, timeout, oom scenarios"
     echo ""
     echo "Examples:"
-    echo "  $0 fast     # Quick test under 5 min"
-    echo "  $0 mixed"
-    echo "  $0 args"
+    echo "  $0 levels   # Best for testing all escalation levels"
+    echo "  $0 quick    # Fast sanity check"
+    echo "  $0 all      # Run comprehensive tests"
 }
 
 # Main
@@ -267,8 +320,8 @@ main() {
     check_docker
 
     case "${1:-}" in
-        fast)
-            scenario_fast
+        levels)
+            scenario_levels
             ;;
         quick)
             scenario_quick
@@ -282,6 +335,9 @@ main() {
         mixed)
             scenario_mixed
             ;;
+        mixed-fail)
+            scenario_mixed_fail
+            ;;
         args)
             scenario_args
             ;;
@@ -291,36 +347,37 @@ main() {
         max)
             scenario_max
             ;;
+        max-fail)
+            scenario_max_fail
+            ;;
         all)
             print_header "Running All Scenarios"
+            print_info "This will run: levels, quick, timeout, oom"
+            print_info "Estimated time: ~15-20 minutes"
+            echo ""
+
+            scenario_levels
+            echo ""
+            print_info "Levels test submitted. Waiting for completion..."
+            print_info "Monitor: squeue -u root"
+            echo ""
+            read -p "Press Enter when queue is empty to continue..."
+
             scenario_quick
             echo ""
             read -p "Press Enter to continue to timeout scenario..."
+
             scenario_timeout
             echo ""
             read -p "Press Enter to continue to OOM scenario..."
+
             scenario_oom
-            echo ""
-            read -p "Press Enter to continue to mixed scenario..."
-            scenario_mixed
-            echo ""
-            read -p "Press Enter to continue to args scenario..."
-            scenario_args
             ;;
         *)
             usage
             exit 1
             ;;
     esac
-
-    echo ""
-    print_info "Jobs submitted! Monitor with:"
-    echo "  squeue"
-    echo "  sacct -j <job_id>"
-    echo ""
-    print_info "View in visualizer:"
-    echo "  (on host) python3 examples/jobs/visualizer-server.py --data-dir ./data"
-    echo "  Open http://localhost:8080"
 }
 
 main "$@"

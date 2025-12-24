@@ -1,0 +1,43 @@
+# Escalation Levels - 4 levels for testing
+levels:
+  - partition: devel,day
+    mem: 1G
+    time: "00:01:00"
+
+  - partition: week
+    mem: 4G
+    time: "00:02:00"
+
+  - partition: week
+    mem: 8G
+    time: "00:04:00"
+
+  - partition: pi_jetz
+    mem: 16G
+    time: "00:08:00"
+
+failed_jobs:
+  report: true
+
+timeout:
+  poll_interval: 5
+  sacct_delay: 2
+
+retry:
+  max_retries: 5
+  retry_delay: 5
+
+tracker:
+  base_dir: "/data/tracker"
+  jobs_dir: "/data/tracker/jobs"
+  history_log: "/data/tracker/history.log"
+  checkpoint_dir: "/data/tracker/checkpoints"
+
+defaults:
+  partition: "day"
+  output_pattern: "/data/%x-%j.out"
+  export_vars: "ALL"
+
+logging:
+  enabled: false
+  db_path: "/host/data/escalation.db"

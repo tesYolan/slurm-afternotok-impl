@@ -1,0 +1,670 @@
+services:
+  mysql:
+    image: mariadb:12
+    hostname: mysql
+    container_name: mysql
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-slurm_acct_db}
+      MYSQL_USER: ${MYSQL_USER:-slurm}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+    volumes:
+      - var_lib_mysql:/var/lib/mysql
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  slurmdbd:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    build:
+      context: .
+      args:
+        SLURM_VERSION: ${SLURM_VERSION:-25.05.3}
+      cache_from:
+        - slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmdbd"]
+    container_name: slurmdbd
+    hostname: slurmdbd
+    environment:
+      MYSQL_USER: ${MYSQL_USER:-slurm}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-password}
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - var_log_slurm:/var/log/slurm
+    expose:
+      - "6819"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmdbd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  slurmctld:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmctld"]
+    container_name: slurmctld
+    hostname: slurmctld
+    working_dir: /data
+    volumes:
+      - etc_munge:/etc/munge:z
+      - etc_slurm:/etc/slurm:z
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data:z
+      - var_log_slurm:/var/log/slurm:z
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6817"
+    depends_on:
+      slurmdbd:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "scontrol ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  slurmrestd:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmrestd"]
+    container_name: slurmrestd
+    hostname: slurmrestd
+    privileged: true
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - var_log_slurm:/var/log/slurm
+    ports:
+      - "6820:6820"
+    expose:
+      - "6820"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /var/run/slurmrestd/slurmrestd.socket"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # DEVEL PARTITION: 10 nodes @ 1GB each (d1-d10)
+  # ============================================================
+  d1:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d1
+    hostname: d1
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d2:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d2
+    hostname: d2
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d3:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d3
+    hostname: d3
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d4:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d4
+    hostname: d4
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d5:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d5
+    hostname: d5
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d6:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d6
+    hostname: d6
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d7:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d7
+    hostname: d7
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d8:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d8
+    hostname: d8
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d9:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d9
+    hostname: d9
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  d10:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: d10
+    hostname: d10
+    working_dir: /data
+    privileged: true
+    mem_limit: 1g
+    memswap_limit: 1g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # DAY PARTITION: 5 nodes @ 2GB each (n1-n5)
+  # ============================================================
+  n1:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: n1
+    hostname: n1
+    working_dir: /data
+    privileged: true
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  n2:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: n2
+    hostname: n2
+    working_dir: /data
+    privileged: true
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  n3:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: n3
+    hostname: n3
+    working_dir: /data
+    privileged: true
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  n4:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: n4
+    hostname: n4
+    working_dir: /data
+    privileged: true
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  n5:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: n5
+    hostname: n5
+    working_dir: /data
+    privileged: true
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # WEEK PARTITION: 2 nodes @ 8GB each (w1-w2)
+  # ============================================================
+  w1:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: w1
+    hostname: w1
+    working_dir: /data
+    privileged: true
+    mem_limit: 8g
+    memswap_limit: 8g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  w2:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: w2
+    hostname: w2
+    working_dir: /data
+    privileged: true
+    mem_limit: 8g
+    memswap_limit: 8g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # PI_JETZ PARTITION: 1 node @ 16GB (p1)
+  # ============================================================
+  p1:
+    image: slurm-docker-cluster:${SLURM_VERSION:-25.05.3}
+    command: ["slurmd"]
+    container_name: p1
+    hostname: p1
+    working_dir: /data
+    privileged: true
+    mem_limit: 16g
+    memswap_limit: 16g
+    volumes:
+      - etc_munge:/etc/munge
+      - etc_slurm:/etc/slurm
+      - ./config/${SLURM_CONFIG_VERSION:-25.05}/slurm.conf:/etc/slurm/slurm.conf:ro
+      - slurm_jobdir:/data
+      - var_log_slurm:/var/log/slurm
+      - ./slurm-afternotok-impl:/data/jobs:ro
+    expose:
+      - "6818"
+    depends_on:
+      slurmctld:
+        condition: service_healthy
+    networks:
+      - slurm-network
+    healthcheck:
+      test: ["CMD-SHELL", "pidof slurmd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  etc_munge:
+  etc_slurm:
+  slurm_jobdir:
+  var_lib_mysql:
+  var_log_slurm:
+
+networks:
+  slurm-network:
+    driver: bridge

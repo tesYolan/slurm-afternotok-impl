@@ -1,0 +1,49 @@
+# Escalation Levels - Use all nodes, OOMs on small nodes just escalate next round
+# Node memory: devel=1G, day=2G, week=8G, pi_jetz=16G
+
+# Max chars for array spec before batching with afterany (default: 10000)
+# max_array_spec_len: 10000
+
+levels:
+  - partition: devel,day,week,pi_jetz
+    mem: 1G
+    time: "00:01:00"
+
+  - partition: day,week,pi_jetz          # 2G: devel excluded (1G nodes)
+    mem: 2G
+    time: "00:02:00"
+
+  - partition: week,pi_jetz              # 4G: only 8G+ nodes
+    mem: 4G
+    time: "00:04:00"
+
+  - partition: pi_jetz                   # 8G: final fallback (1 node)
+    mem: 8G
+    time: "00:08:00"
+
+timeout:
+  sacct_delay: 2
+
+tracker:
+  base_dir: "/data/tracker"
+  history_log: "/data/tracker/history.log"
+  checkpoint_dir: "/data/tracker/checkpoints"
+  output_dir: "/data/tracker/outputs"
+
+logging:
+  enabled: true
+  db_path: "/data/tracker/escalation.db"
+
+# How to handle each Slurm job state (escalate or no_retry)
+state_handling:
+  OUT_OF_MEMORY: escalate
+  TIMEOUT: escalate
+  DEADLINE: escalate
+  PREEMPTED: escalate
+  BOOT_FAIL: escalate
+  NODE_FAIL: escalate
+  FAILED: no_retry
+  CANCELLED: no_retry
+  # Exit code overrides (checked when state is FAILED)
+  exit_codes:
+    137: escalate              # OOM killer (128+9)
