@@ -116,8 +116,8 @@ docker exec slurmctld sbatch -p devel --mem=500M --wrap="hostname; sleep 5"
 docker exec slurmctld sbatch -p devel,day --mem=1G --wrap="hostname"
 ```
 
-#### Memory/Time Escalation Tests
-These tests use the automatic escalation system to retry failed jobs with more resources.
+#### Quick Escalation Tests
+Basic tests using the automatic escalation system:
 
 ```bash
 # Run a specific scenario (e.g., 'levels' to test all 4 escalation steps)
@@ -126,6 +126,31 @@ docker exec slurmctld bash -c "cd /data && /data/jobs/tests/test-scenarios.sh le
 # Run a large scale test (1000 tasks with mixed behavior)
 docker exec slurmctld bash -c "cd /data && /data/jobs/tests/test-scenarios.sh mixed"
 ```
+
+#### Stress Tests (Aggressive OOM Testing for Mac Docker)
+**Recommended for validating OOM detection and escalation.**
+
+These tests force actual memory consumption to trigger OOM kills:
+
+```bash
+# Quick sanity check (10 tasks, 1-2 min)
+docker exec slurmctld bash -c 'cd /data/jobs/tests && ./docker-stress-scenarios.sh quick'
+
+# Basic OOM testing (20 tasks, 3-5 min)
+docker exec slurmctld bash -c 'cd /data/jobs/tests && ./docker-stress-scenarios.sh oom-basic'
+
+# Heavy OOM stress (50 tasks, 5-10 min)
+docker exec slurmctld bash -c 'cd /data/jobs/tests && ./docker-stress-scenarios.sh oom-heavy'
+
+# Comprehensive test (100 tasks, 10-20 min)
+docker exec slurmctld bash -c 'cd /data/jobs/tests && ./docker-stress-scenarios.sh full'
+```
+
+**What makes stress tests aggressive:**
+- Forces page faults by writing to every 4KB memory page
+- Prevents swapping by continuously touching allocated memory
+- Tests memory sizes: 100MB → 10GB across all escalation levels
+- Verifies hard container limits (no swap allowed)
 
 ### 4. Monitoring and Watcher
 

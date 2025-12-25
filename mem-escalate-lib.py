@@ -1626,9 +1626,13 @@ def analyze_job(job_id: str, config_file: str | None = None) -> None:
                 pass
 
         # Track by original state for breakdown
+        # Treat FAILED with OOM-like exit codes as OOM
         if 'OUT_OF_MEMORY' in state:
             oom_indices.append(task_id)
-        elif 'TIMEOUT' in state:
+        elif 'FAILED' in state and main_exit in (9, 137):
+            # Exit code 9 or 137 (SIGKILL) from OOM killer
+            oom_indices.append(task_id)
+        elif 'TIMEOUT' in state or 'DEADLINE' in state:
             timeout_indices.append(task_id)
 
         # Determine action based on config

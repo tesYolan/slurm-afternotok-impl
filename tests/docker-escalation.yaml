@@ -1,0 +1,50 @@
+# Docker-optimized Escalation Config
+# For quick testing on Mac M1/limited resources
+# Uses shorter time limits matching Docker partition config
+
+levels:
+  - partition: devel,day,pi_jetz
+    mem: 1G
+    time: "00:01:00"
+
+  - partition: day,week,pi_jetz
+    mem: 2G
+    time: "00:02:00"
+
+  - partition: week,pi_jetz
+    mem: 4G
+    time: "00:04:00"
+
+  - partition: pi_jetz
+    mem: 8G
+    time: "00:08:00"
+
+  - partition: pi_jetz
+    mem: 16G
+    time: "00:15:00"
+
+timeout:
+  sacct_delay: 2
+
+tracker:
+  base_dir: "/data/tracker"
+  history_log: "/data/tracker/history.log"
+  checkpoint_dir: "/data/tracker/checkpoints"
+  output_dir: "/data/tracker/outputs"
+
+logging:
+  enabled: true
+  db_path: "/data/tracker/escalation.db"
+
+state_handling:
+  OUT_OF_MEMORY: escalate
+  TIMEOUT: escalate
+  DEADLINE: escalate
+  PREEMPTED: escalate
+  BOOT_FAIL: escalate
+  NODE_FAIL: escalate
+  FAILED: escalate        # Retry all FAILED tasks (catches OOM with exit code 9)
+  CANCELLED: no_retry
+  exit_codes:
+    9: escalate    # SIGKILL from OOM killer (Docker)
+    137: escalate  # SIGKILL from shell (128+9)

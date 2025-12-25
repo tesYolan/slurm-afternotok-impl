@@ -52,6 +52,17 @@ fi
 # Disable Python bytecode caching
 export PYTHONDONTWRITEBYTECODE=1
 
+# Set config file path (default to escalation-target.yaml if not provided)
+if [[ -z "$CONFIG_FILE" ]]; then
+    # Use PYLIB path to find script directory, or default to /data/jobs
+    if [[ -n "$PYLIB" ]]; then
+        SCRIPT_DIR_=$(dirname "$PYLIB")
+        CONFIG_FILE="$SCRIPT_DIR_/escalation-target.yaml"
+    else
+        CONFIG_FILE="/data/jobs/escalation-target.yaml"
+    fi
+fi
+
 echo "========================================"
 echo "Escalation Handler"
 echo "========================================"
@@ -191,10 +202,11 @@ submit_array_batched() {
 # 1. Query failure indices from parent job
 # ============================================================
 echo "Checking parent job $PARENT_JOB for failures..."
+echo "Using config: $CONFIG_FILE"
 
 sleep 2  # Wait for sacct to update
 
-eval "$(python3 "$PYLIB" analyze-job "$PARENT_JOB")"
+eval "$(python3 "$PYLIB" analyze-job "$PARENT_JOB" --config "$CONFIG_FILE")"
 
 # Variables set: TOTAL_COUNT, COMPLETED_COUNT, OOM_COUNT, TIMEOUT_COUNT
 # OOM_INDICES, TIMEOUT_INDICES, OTHER_FAILED_INDICES, OTHER_FAILED_COUNT
