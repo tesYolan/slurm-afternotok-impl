@@ -63,38 +63,32 @@ Level 4: -p pi_jetz --mem=16G --time=00:08:00
 
 ## Quick Start
 
-### 1. Clone Base Repository
+### 1. Build and Start the Cluster
+
+The `build.sh` script automates the entire setup process:
 
 ```bash
-git clone https://github.com/giovtorres/slurm-docker-cluster.git
-cd slurm-docker-cluster
+cd docker
+
+# Build and start the cluster (first time or regular start)
+./build.sh
+
+# Force rebuild of images (if you made changes to Dockerfile)
+./build.sh --rebuild
+
+# Stop the cluster
+./build.sh --down
 ```
 
-### 2. Copy Config Files
+**What the build script does:**
+1. Clones the upstream giovtorres/slurm-docker-cluster repository (if not already present)
+2. Applies custom overlays (docker-compose.yml, slurm.conf, etc.)
+3. Patches the Dockerfile to add python3-pyyaml dependency
+4. Builds and starts all 18 compute nodes + 4 control services
 
-Copy these files to the appropriate locations in the base repo:
+**Note:** First-time setup takes ~2-5 minutes depending on your network and Docker cache.
 
-```bash
-# From slurm-docker-cluster root directory
-cp slurm-afternotok-impl/docker/docker-compose.yml .
-cp slurm-afternotok-impl/docker/docker-entrypoint.sh .
-cp slurm-afternotok-impl/docker/slurm.conf config/25.05/slurm.conf
-```
-
-### 3. Build and Start the Cluster
-
-```bash
-# Clean up any existing containers and volumes
-docker compose down -v
-
-# Start the cluster (18 compute nodes + 4 control services)
-docker compose up -d
-
-# Wait for all services to be healthy (~30-60 seconds)
-docker compose ps
-```
-
-### 4. Verify the Cluster
+### 2. Verify the Cluster
 
 ```bash
 # Check partition status
@@ -111,7 +105,7 @@ docker exec slurmctld sinfo
 docker exec slurmctld scontrol show partition
 ```
 
-### 5. Submit Test Jobs
+### 3. Submit Test Jobs
 
 #### Standard Slurm Jobs
 ```bash
@@ -133,7 +127,7 @@ docker exec slurmctld bash -c "cd /data && /data/jobs/tests/test-scenarios.sh le
 docker exec slurmctld bash -c "cd /data && /data/jobs/tests/test-scenarios.sh mixed"
 ```
 
-### 6. Monitoring and Watcher
+### 4. Monitoring and Watcher
 
 The escalation system creates a **Chain ID** for each submission (e.g., `20251224-123456-abcd`). Use this ID to monitor progress.
 
@@ -148,7 +142,7 @@ docker exec slurmctld /data/jobs/mem-escalate.sh --status <chain_id>
 docker exec -it slurmctld /data/jobs/mem-escalate.sh --status <chain_id> --watch
 ```
 
-### 8. Cleanup
+### 5. Cleanup
 
 To clear all job history, checkpoints, and output files:
 
@@ -156,7 +150,7 @@ To clear all job history, checkpoints, and output files:
 docker exec slurmctld /data/jobs/clean-slurm.sh
 ```
 
-### 9. Monitor Jobs (General Slurm)
+### 6. Monitor Jobs (General Slurm)
 
 ```bash
 # Check job queue
@@ -183,9 +177,15 @@ docker logs d1
 docker exec -it d1 bash
 
 # Restart the cluster
+cd docker/slurm-docker-cluster
 docker compose restart
 
-# Stop the cluster (preserves volumes)
+# Stop the cluster (recommended: use build script)
+cd docker
+./build.sh --down
+
+# Alternative: Manual stop (from slurm-docker-cluster directory)
+cd docker/slurm-docker-cluster
 docker compose down
 
 # Stop and remove all data
@@ -196,6 +196,7 @@ docker compose down -v
 
 | File | Description |
 |------|-------------|
+| `build.sh` | Automated build script (clones upstream, applies overlays, builds cluster) |
 | `docker-compose.yml` | Docker Compose config with 18 compute nodes |
 | `slurm.conf` | Slurm configuration with 4 partitions |
 | `docker-entrypoint.sh` | Container entrypoint with node hostname detection |
