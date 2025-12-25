@@ -42,8 +42,9 @@ state_handling:
   PREEMPTED: escalate
   BOOT_FAIL: escalate
   NODE_FAIL: escalate
-  FAILED: no_retry
+  FAILED: escalate        # Retry all FAILED tasks (catches OOM with exit code 9)
   CANCELLED: no_retry
   # Exit code overrides (checked when state is FAILED)
   exit_codes:
-    137: escalate              # OOM killer (128+9)
+    9: escalate                # SIGKILL from OOM killer (Docker)
+    137: escalate              # SIGKILL from shell (128+9)
